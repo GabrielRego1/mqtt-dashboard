@@ -3,33 +3,37 @@
 #include <DHT.h>
 
 // Wi-Fi configuration
-const char* WIFI_SSID = "";
+const char* WIFI_SSID = "Wokwi-GUEST"; 
 const char* WIFI_PASSWORD = "";
 
 // MQTT configuration
-const char* MQTT_SERVER = "broker.hivemq.com";
+const char* MQTT_BROKER = "broker.hivemq.com";
 const int MQTT_PORT = 1883;
-const char* MQTT_LED_COMMAND_TOPIC = "led/control";
-const char* MQTT_LED_STATUS_TOPIC = "led/status";
-const char* MQTT_GAS_TOPIC = "gas/value";
-const char* MQTT_TEMP_TOPIC = "dht/temperature";
-const char* MQTT_HUMIDITY_TOPIC = "dht/humidity";
 
-// Hardware configuration
-const int LED_PIN = 2;
-const int GAS_SENSOR_PIN = 34;
-const int DHT_PIN = 32;
-#define DHT_TYPE DHT11
+const char* TOPIC_GAS_VALUE = "sensor/gas";
+const char* TOPIC_TEMPERATURE = "sensor/temperature";
+const char* TOPIC_HUMIDITY = "sensor/humidity";
+const char* TOPIC_CURRENT = "sensor/current";
+const char* TOPIC_VOLTAGE = "sensor/voltage";
+
+// Hardware pin definitions
+const int PIN_GAS_SENSOR = 33;
+const int PIN_DHT_SENSOR = 32;
+const int PIN_CURRENT_SENSOR = 34;
+const int PIN_VOLTAGE_SENSOR = 35;
+
+#define DHT_SENSOR_TYPE DHT22
 
 // Timing
-unsigned long lastSensorPublishTime = 0;
-const unsigned long SENSOR_PUBLISH_INTERVAL_MS = 1000;
+unsigned long lastPublishTimeMs = 0;
+const unsigned long SENSOR_PUBLISH_INTERVAL_MS = 500;
 
-// Objects
+// Global objects
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
-DHT dht(DHT_PIN, DHT_TYPE);
+DHT dhtSensor(PIN_DHT_SENSOR, DHT_SENSOR_TYPE);
 
+// Connect to Wi-Fi network
 void connectToWiFi() {
   Serial.println("Connecting to Wi-Fi...");
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -39,103 +43,99 @@ void connectToWiFi() {
     Serial.print(".");
   }
 
-  Serial.println();
-  Serial.print("Connected. IP Address: ");
-  Serial.println(WiFi.localIP());
+  Serial.println("\nWi-Fi connected. IP address: " + WiFi.localIP().toString());
 }
 
-void handleMqttMessage(char* topic, byte* payload, unsigned int length) {
-  String message;
-  for (unsigned int i = 0; i < length; ++i) {
-    message += (char)payload[i];
-  }
 
-  Serial.print("Received [");
-  Serial.print(topic);
-  Serial.print("]: ");
-  Serial.println(message);
-
-  if (message == "L") {
-    digitalWrite(LED_PIN, HIGH);
-    mqttClient.publish(MQTT_LED_STATUS_TOPIC, "LED on");
-  } else if (message == "D") {
-    digitalWrite(LED_PIN, LOW);
-    mqttClient.publish(MQTT_LED_STATUS_TOPIC, "LED off");
-  }
-}
-
-void connectToMqtt() {
+// Connect to MQTT broker and subscribe to necessary topics
+void connectToMqttBroker() {
   while (!mqttClient.connected()) {
-    Serial.print("Connecting to MQTT...");
+    Serial.print("Connecting to MQTT broker... ");
     String clientId = "ESP32Client-" + String(random(0xffff), HEX);
 
     if (mqttClient.connect(clientId.c_str())) {
-      Serial.println("Connected.");
-      mqttClient.subscribe(MQTT_LED_COMMAND_TOPIC);
+      Serial.println("connected.");
     } else {
-      Serial.print("Failed. rc=");
-      Serial.print(mqttClient.state());
-      Serial.println(". Retrying in 5s...");
+      Serial.printf("connection failed (rc=%d). Retrying in 5 seconds...\n", mqttClient.state());
       delay(5000);
     }
   }
 }
 
-void publishGasSensorValue() {
-  int gasValue = analogRead(GAS_SENSOR_PIN);
+// Publish gas sensor reading via MQTT
+void publishGasSensorReading() {
+  int gasLevel = analogRead(PIN_GAS_SENSOR);
   char payload[10];
-  itoa(gasValue, payload, 10);
-  mqttClient.publish(MQTT_GAS_TOPIC, payload);
-  Serial.print("Gas value published: ");
-  Serial.println(payload);
+  itoa(gasLevel, payload, 10);
+  mqttClient.publish(TOPIC_GAS_VALUE, payload);
+  Serial.printf("Published gas level: %s\n", payload);
 }
 
-void publishDHTValues() {
-  float temperature = dht.readTemperature();
-  float humidity = dht.readHumidity();
+// Publish current sensor reading via MQTT
+void publishCurrentSensorReading() {
+  int currentLevel = analogRead(PIN_CURRENT_SENSOR);
+  char payload[10];
+  snprintf(payload, sizeof(payload), "%d", currentLevel);
+  mqttClient.publish(TOPIC_CURRENT, payload);
+  Serial.printf("Published current level: %s\n", payload);
+}
+
+// Publish voltage sensor reading via MQTT
+void publishVoltageSensorReading() {
+  int voltageLevel = analogRead(PIN_VOLTAGE_SENSOR);
+  char payload[10];
+  snprintf(payload, sizeof(payload), "%d", voltageLevel);
+  mqttClient.publish(TOPIC_VOLTAGE, payload);
+  Serial.printf("Published voltage level: %s\n", payload);
+}
+
+
+// Publish temperature and humidity readings via MQTT
+void publishTemperatureAndHumidity() {
+  float temperature = dhtSensor.readTemperature();
+  float humidity = dhtSensor.readHumidity();
 
   if (isnan(temperature) || isnan(humidity)) {
-    Serial.println("Failed to read from DHT sensor.");
+    Serial.println("Error: Failed to read from DHT sensor.");
     return;
   }
 
-  char tempPayload[10];
+  char tempPayload[10], humidityPayload[10];
   dtostrf(temperature, 1, 2, tempPayload);
-  mqttClient.publish(MQTT_TEMP_TOPIC, tempPayload);
+  dtostrf(humidity, 1, 2, humidityPayload);
 
-  char humPayload[10];
-  dtostrf(humidity, 1, 2, humPayload);
-  mqttClient.publish(MQTT_HUMIDITY_TOPIC, humPayload);
+  mqttClient.publish(TOPIC_TEMPERATURE, tempPayload);
+  mqttClient.publish(TOPIC_HUMIDITY, humidityPayload);
 
-  Serial.print("Temperature published: ");
-  Serial.println(tempPayload);
-  Serial.print("Humidity published: ");
-  Serial.println(humPayload);
+  Serial.printf("Published temperature: %s°C\n", tempPayload);
+  Serial.printf("Published humidity: %s%%\n", humidityPayload);
 }
 
 void setup() {
-  pinMode(LED_PIN, OUTPUT);
-  pinMode(GAS_SENSOR_PIN, INPUT);
+  pinMode(PIN_GAS_SENSOR, INPUT);
+  pinMode(PIN_CURRENT_SENSOR, INPUT);
+
   Serial.begin(115200);
-  
-  dht.begin();
+
+  dhtSensor.begin();
   connectToWiFi();
 
-  mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
-  mqttClient.setCallback(handleMqttMessage);
+  mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
 }
 
 void loop() {
   if (!mqttClient.connected()) {
-    connectToMqtt();
+    connectToMqttBroker();
   }
 
   mqttClient.loop();
 
-  unsigned long currentTime = millis();
-  if (currentTime - lastSensorPublishTime > SENSOR_PUBLISH_INTERVAL_MS) {
-    lastSensorPublishTime = currentTime;
-    publishGasSensorValue();
-    publishDHTValues();
+  unsigned long now = millis();
+  if (now - lastPublishTimeMs >= SENSOR_PUBLISH_INTERVAL_MS) {
+    lastPublishTimeMs = now;
+    publishGasSensorReading();
+    publishTemperatureAndHumidity();
+    publishCurrentSensorReading();
+    publishVoltageSensorReading();
   }
 }
