@@ -22,31 +22,34 @@ ChartJS.register(
   Tooltip,
   Legend
 );
-
 const MQTT_BROKER_URL = "wss://broker.hivemq.com:8884/mqtt";
-const LED_COMMAND_TOPIC = "led/control";
-const GAS_VALUE_TOPIC = "gas/value";
-const LED_STATUS_TOPIC = "led/status";
-const TEMPERATURE_TOPIC = "dht/temperature";
-const HUMIDITY_TOPIC = "dht/humidity";
+const GAS_VALUE_TOPIC = "sensor/gas";
+const TEMPERATURE_TOPIC = "sensor/temperature";
+const HUMIDITY_TOPIC = "sensor/humidity";
+const CURRENT_TOPIC = "sensor/current";
+const VOLTAGE_TOPIC = "sensor/voltage";
 
 export default function MqttDashboard() {
   const [gasValue, setGasValue] = useState("-");
   const [temperature, setTemperature] = useState("-");
   const [humidity, setHumidity] = useState("-");
-  const [ledStatus, setLedStatus] = useState("Desconhecido");
-  const [client, setClient] = useState<any | null>(null);
+  const [current, setCurrent] = useState("-");
+  const [voltage, setVoltage] = useState("-");
 
   const [gasData, setGasData] = useState<number[]>([]);
   const [temperatureData, setTemperatureData] = useState<number[]>([]);
   const [humidityData, setHumidityData] = useState<number[]>([]);
+  const [currentData, setCurrentData] = useState<number[]>([]);
+  const [voltageData, setVoltageData] = useState<number[]>([]);
   const [timestamps, setTimestamps] = useState<string[]>([]);
 
   const [gasThreshold, setGasThreshold] = useState<number>(4000);
-  const [temperatureThreshold, setTemperatureThreshold] = useState<number>(30);
-  const [humidityThreshold, setHumidityThreshold] = useState<number>(70);
+  const [temperatureThreshold, setTemperatureThreshold] = useState<number>(80);
+  const [humidityThreshold, setHumidityThreshold] = useState<number>(90);
+  const [currentThreshold, setCurrentThreshold] = useState<number>(200);
+  const [voltageThreshold, setVoltageThreshold] = useState<number>(250);
 
-  const [notifications, setNotifications] = useState<string[]>([]);
+    const [notifications, setNotifications] = useState<string[]>([]);
 
   useEffect(() => {
     const mqttClient = (window as any).mqtt.connect(MQTT_BROKER_URL);
@@ -54,12 +57,12 @@ export default function MqttDashboard() {
     mqttClient.on("connect", () => {
       console.log("Conectado ao broker MQTT");
       mqttClient.subscribe(GAS_VALUE_TOPIC);
-      mqttClient.subscribe(LED_STATUS_TOPIC);
       mqttClient.subscribe(TEMPERATURE_TOPIC);
       mqttClient.subscribe(HUMIDITY_TOPIC);
+      mqttClient.subscribe(CURRENT_TOPIC);
+      mqttClient.subscribe(VOLTAGE_TOPIC);
     });
-
-    mqttClient.on("message", (topic: string, message: Buffer) => {
+mqttClient.on("message", (topic: string, message: Buffer) => {
       const value = parseFloat(message.toString());
       const timestamp = new Date().toLocaleTimeString();
 
@@ -99,29 +102,41 @@ export default function MqttDashboard() {
             `Alerta: Umidade (${value} %) ultrapassou o limite de ${humidityThreshold} % em ${day} às ${timestamp}`,
           ]);
         }
-      } else if (topic === LED_STATUS_TOPIC) {
-        setLedStatus(message.toString());
-      }
+      } else if (topic === CURRENT_TOPIC) {
+        setCurrent(value.toString());
+        setCurrentData((prev) => [...prev, value].slice(-20));
+        if (value > currentThreshold) {
+          const date = new Date();
+          const timestamp = date.toLocaleTimeString();
+          const day = date.toLocaleDateString();
+          setNotifications((prev) => [
+            ...prev,
+            `Alerta: Corrente (${value} A) ultrapassou o limite de ${currentThreshold} A em ${day} às ${timestamp}`,
+          ]);
+        }
+      } else if (topic === VOLTAGE_TOPIC) {
+        setVoltage(value.toString());
+        setVoltageData((prev) => [...prev, value].slice(-20));
+        if (value > voltageThreshold) {
+          const date = new Date();
+          const timestamp = date.toLocaleTimeString();
+          const day = date.toLocaleDateString();
+          setNotifications((prev) => [
+            ...prev,
+            `Alerta: Tensão (${value} V) ultrapassou o limite de ${voltageThreshold} V em ${day} às ${timestamp}`,
+          ]);
+        }
+      } 
 
       setTimestamps((prev) => [...prev, timestamp].slice(-20));
     });
 
-    setClient(mqttClient);
-
     return () => {
       mqttClient.end();
     };
-  }, [gasThreshold, temperatureThreshold, humidityThreshold]);
+  }, [gasThreshold, temperatureThreshold, humidityThreshold, currentThreshold, voltageThreshold]);
 
-  const handleLedToggle = (turnOn: boolean) => {
-    if (client) {
-      const message = turnOn ? "L" : "D";
-      client.publish(LED_COMMAND_TOPIC, message);
-    }
-  };
-
-  // Configuração dos gráficos
-  const gasChartData = {
+const gasChartData = {
     labels: timestamps,
     datasets: [
       {
@@ -157,6 +172,30 @@ export default function MqttDashboard() {
     ],
   };
 
+  const currentChartData = {
+    labels: timestamps,
+    datasets: [
+      {
+        label: "Corrente (A)",
+        data: currentData,
+        borderColor: "rgb(255, 206, 86)",
+        backgroundColor: "rgba(255, 206, 86, 0.2)",
+      },
+    ],
+  };
+
+  const voltageChartData = {
+    labels: timestamps,
+    datasets: [
+      {
+        label: "Tensão (V)",
+        data: voltageData,
+        borderColor: "rgb(153, 102, 255)",
+        backgroundColor: "rgba(153, 102, 255, 0.2)",
+      },
+    ],
+  };
+
   const chartOptions = {
     responsive: true,
     plugins: {
@@ -170,7 +209,7 @@ export default function MqttDashboard() {
     },
   };
 
-  return (
+ return (
     <div className="p-6 max-w-md mx-auto bg-white rounded-xl shadow-md space-y-4">
       <h1 className="text-2xl font-bold">Painel de Controle MQTT</h1>
 
@@ -190,29 +229,15 @@ export default function MqttDashboard() {
       </div>
 
       <div>
-        <p className="text-gray-700">Status do LED:</p>
-        <p className="text-lg font-semibold">{ledStatus}</p>
+        <p className="text-gray-700">Corrente:</p>
+        <p className="text-lg font-mono">{current} A</p>
       </div>
-      <hr className="my-4 border-gray-300" />
-      <div className="mt-6">
-        <h2 className="text-xl font-bold flex items-center gap-2">
-          <FaCogs /> Controle do LED
-        </h2>
-        <div className="flex gap-4">
-          <button
-            className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
-            onClick={() => handleLedToggle(true)}
-          >
-            Ligar LED
-          </button>
-          <button
-            className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
-            onClick={() => handleLedToggle(false)}
-          >
-            Desligar LED
-          </button>
-        </div>
+
+      <div>
+        <p className="text-gray-700">Tensão:</p>
+        <p className="text-lg font-mono">{voltage} V</p>
       </div>
+
 
       <hr className="my-4 border-gray-300" />
       <div className="mt-6">
@@ -244,6 +269,24 @@ export default function MqttDashboard() {
               type="number"
               value={humidityThreshold}
               onChange={(e) => setHumidityThreshold(Number(e.target.value))}
+              className="w-full px-2 py-1 border rounded"
+            />
+          </div>
+          <div>
+            <label className="block text-gray-700">Limite de Corrente:</label>
+            <input
+              type="number"
+              value={currentThreshold}
+              onChange={(e) => setCurrentThreshold(Number(e.target.value))}
+              className="w-full px-2 py-1 border rounded"
+            />
+          </div>
+          <div>
+            <label className="block text-gray-700">Limite de Tensão:</label>
+            <input
+              type="number"
+              value={voltageThreshold}
+              onChange={(e) => setVoltageThreshold(Number(e.target.value))}
               className="w-full px-2 py-1 border rounded"
             />
           </div>
@@ -288,6 +331,20 @@ export default function MqttDashboard() {
           <FaChartLine /> Gráfico de Umidade
         </h2>
         <Line data={humidityChartData} options={chartOptions} />
+      </div>
+
+      <div className="mt-6">
+        <h2 className="text-xl font-bold flex items-center gap-2">
+          <FaChartLine /> Gráfico de Corrente
+        </h2>
+        <Line data={currentChartData} options={chartOptions} />
+      </div>
+
+      <div className="mt-6">
+        <h2 className="text-xl font-bold flex items-center gap-2">
+          <FaChartLine /> Gráfico de Tensão
+        </h2>
+        <Line data={voltageChartData} options={chartOptions} />
       </div>
     </div>
   );
